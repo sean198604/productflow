@@ -1,6 +1,14 @@
-# ProductFlow
+<div align="center">
 
-**多租户产品资料管理与报价文件生成平台**
+# ProductFlow · 产品资料与报价工作台
+
+**多租户产品资料管理、客户组合与可编辑报价文件生成平台**
+
+[![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black)](https://react.dev/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-Python%203.12-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
+[![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker&logoColor=white)](https://www.docker.com/)
+
+</div>
 
 ProductFlow 面向外贸业务团队：将供应商 Excel 与嵌入图片导入标准产品资料库，按客户维护产品组合和模板，并从经验证的 PPTX/XLSX 模板生成原生可编辑的报价文件。
 
