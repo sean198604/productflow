@@ -1,5 +1,3 @@
-<p align="center"><img src="assets/readme-cover.png" alt="ProductFlow project cover" width="100%" /></p>
-
 # ProductFlow
 
 **多租户产品资料管理与报价文件生成平台**
@@ -7,6 +5,14 @@
 ProductFlow 面向外贸业务团队：将供应商 Excel 与嵌入图片导入标准产品资料库，按客户维护产品组合和模板，并从经验证的 PPTX/XLSX 模板生成原生可编辑的报价文件。
 
 > 当前为 MVP：核心流程已经实现，审计整改与真实业务模板验收仍在进行中。
+
+## 真实界面截图
+
+以下均为 ProductFlow 实际运行界面截图，展示的游戏机产品资料为项目演示数据；不包含登录界面或账号信息。
+
+<p align="center"><img src="docs/screenshots/business-overview.png" alt="ProductFlow 业务概览与系统健康状态" width="100%" /></p>
+
+<p align="center"><img src="docs/screenshots/product-library.png" alt="ProductFlow 产品资料库中的游戏机产品数据" width="100%" /></p>
 
 ## 核心能力
 
