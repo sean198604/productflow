@@ -1,0 +1,181 @@
+name: productflow
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-productflow}
+      POSTGRES_USER: ${POSTGRES_USER:-productflow}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    volumes:
+      - productflow_postgres_data:/var/lib/postgresql/data
+    networks:
+      - productflow_internal
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  redis:
+    image: redis:7.4-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - productflow_redis_data:/data
+    networks:
+      - productflow_internal
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  migrate:
+    build:
+      context: ./backend
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      APP_ENV: ${APP_ENV:-development}
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-productflow}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-productflow}
+    networks:
+      - productflow_internal
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  database-setup:
+    image: postgres:16-alpine
+    command: ["sh", "/scripts/setup-app-role.sh"]
+    environment:
+      PGHOST: postgres
+      POSTGRES_DB: ${POSTGRES_DB:-productflow}
+      POSTGRES_USER: ${POSTGRES_USER:-productflow}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_APP_USER: ${POSTGRES_APP_USER:-productflow_app}
+      POSTGRES_APP_PASSWORD: ${POSTGRES_APP_PASSWORD:?Set POSTGRES_APP_PASSWORD in .env}
+    volumes:
+      - ./docker/postgres/setup-app-role.sh:/scripts/setup-app-role.sh:ro
+    networks:
+      - productflow_internal
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: "no"
+
+  bootstrap-admin:
+    build:
+      context: ./backend
+    command: ["python", "-m", "app.cli.ensure_platform_admin"]
+    environment:
+      APP_ENV: ${APP_ENV:-development}
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-productflow}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-productflow}
+      INITIAL_ADMIN_ENABLED: ${INITIAL_ADMIN_ENABLED:-false}
+      INITIAL_ADMIN_TENANT_NAME: ${INITIAL_ADMIN_TENANT_NAME:-ProductFlow System}
+      INITIAL_ADMIN_TENANT_SLUG: ${INITIAL_ADMIN_TENANT_SLUG:-productflow-admin}
+      INITIAL_ADMIN_USERNAME: ${INITIAL_ADMIN_USERNAME:-admin}
+      INITIAL_ADMIN_EMAIL: ${INITIAL_ADMIN_EMAIL:-admin@productflow.local}
+      INITIAL_ADMIN_PASSWORD: ${INITIAL_ADMIN_PASSWORD:-not-configured}
+    networks:
+      - productflow_internal
+    depends_on:
+      database-setup:
+        condition: service_completed_successfully
+    restart: "no"
+
+  backend:
+    build:
+      context: ./backend
+    environment:
+      APP_ENV: ${APP_ENV:-development}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_APP_USER:-productflow_app}:${POSTGRES_APP_PASSWORD:?Set POSTGRES_APP_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-productflow}
+      REDIS_URL: redis://redis:6379/0
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:7030}
+      STORAGE_ROOT: /app/storage
+      MAX_UPLOAD_SIZE_MB: ${MAX_UPLOAD_SIZE_MB:-50}
+      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env}
+      JWT_ACCESS_TOKEN_MINUTES: ${JWT_ACCESS_TOKEN_MINUTES:-30}
+    volumes:
+      - ./storage:/app/storage
+    ports:
+      - "${BACKEND_HOST_PORT:-8030}:8000"
+    networks:
+      - productflow_internal
+      - productflow_public
+    depends_on:
+      bootstrap-admin:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=5)",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+      target: runtime
+    ports:
+      - "${FRONTEND_HOST_PORT:-7030}:80"
+    networks:
+      - productflow_public
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+
+  frontend-test:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+      target: test
+    profiles: ["test"]
+
+  backend-test:
+    build:
+      context: ./backend
+    command: ["pytest", "-q"]
+    environment:
+      APP_ENV: test
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_APP_USER:-productflow_app}:${POSTGRES_APP_PASSWORD:?Set POSTGRES_APP_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-productflow}
+      DATABASE_ADMIN_URL: postgresql+asyncpg://${POSTGRES_USER:-productflow}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-productflow}
+      REDIS_URL: redis://redis:6379/0
+      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env}
+    networks:
+      - productflow_internal
+    depends_on:
+      bootstrap-admin:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    profiles: ["test"]
+
+networks:
+  productflow_internal:
+    internal: true
+  productflow_public:
+
+volumes:
+  productflow_postgres_data:
+    name: productflow_postgres_data
+  productflow_redis_data:
+    name: productflow_redis_data
