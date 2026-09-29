@@ -1,3 +1,5 @@
+<p align="center"><img src="assets/readme-cover.png" alt="ProductFlow project cover" width="100%" /></p>
+
 # ProductFlow
 
 **多租户产品资料管理与报价文件生成平台**
