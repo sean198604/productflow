@@ -52,7 +52,13 @@ async def get_auth_context(
         )
         user = await session.scalar(select(User).where(User.id == claims.user_id))
         tenant = await session.scalar(select(Tenant).where(Tenant.id == claims.tenant_id))
-        if user is None or tenant is None or user.status != "active" or tenant.status != "active":
+        if (
+            user is None
+            or tenant is None
+            or user.status != "active"
+            or tenant.status != "active"
+            or user.token_version != claims.token_version
+        ):
             raise AuthenticationError("登录状态无效或账号已停用。")
         yield AuthContext(session=session, user=user, tenant=tenant)
 

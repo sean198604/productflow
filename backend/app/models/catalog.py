@@ -94,6 +94,46 @@ class Product(Base):
     )
 
 
+class ProductDictionaryEntry(Base):
+    __tablename__ = "product_dictionary_entries"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id", "id", name="uq_product_dictionary_entries_tenant_id_id"
+        ),
+        CheckConstraint("kind IN ('category', 'brand')", name="valid_kind"),
+        CheckConstraint("status IN ('active', 'archived')", name="valid_status"),
+        Index(
+            "uq_product_dictionary_entries_tenant_kind_name_ci",
+            "tenant_id",
+            "kind",
+            text("lower(name)"),
+            unique=True,
+        ),
+        Index(
+            "ix_product_dictionary_entries_tenant_kind_status",
+            "tenant_id",
+            "kind",
+            "status",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), primary_key=True, server_default=func.gen_random_uuid()
+    )
+    tenant_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False
+    )
+    kind: Mapped[str] = mapped_column(String(20), nullable=False)
+    name: Mapped[str] = mapped_column(String(160), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="active")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+
 class ProductFieldValue(Base):
     __tablename__ = "product_field_values"
     __table_args__ = (
@@ -178,6 +218,12 @@ class ProductImage(Base):
             name="fk_product_images_tenant_stored_file",
             ondelete="RESTRICT",
         ),
+        ForeignKeyConstraint(
+            ["tenant_id", "processed_file_id"],
+            ["stored_files.tenant_id", "stored_files.id"],
+            name="fk_product_images_tenant_processed_file",
+            ondelete="RESTRICT",
+        ),
         UniqueConstraint(
             "tenant_id",
             "product_id",
@@ -216,6 +262,8 @@ class ProductImage(Base):
     tenant_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), nullable=False)
     product_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), nullable=False)
     stored_file_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), nullable=False)
+    processed_file_id: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True))
+    background_removed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     image_type: Mapped[str] = mapped_column(String(32), nullable=False, default="other")
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     is_primary: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)

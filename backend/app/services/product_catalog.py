@@ -12,8 +12,10 @@ from uuid import UUID, uuid4
 from fastapi import UploadFile
 from PIL import Image, UnidentifiedImageError
 from sqlalchemy import and_, func, or_, select, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from app.core.config import get_settings
 from app.core.errors import BadRequestError, ConflictError, NotFoundError
@@ -24,6 +26,7 @@ from app.models import (
     ImportImageCandidate,
     ImportRow,
     Product,
+    ProductDictionaryEntry,
     ProductFieldValue,
     ProductImage,
     StoredFile,
@@ -32,12 +35,15 @@ from app.schemas.catalog import (
     FieldDataType,
     ImageType,
     ProductCreateRequest,
+    ProductDictionaryCreateRequest,
+    ProductDictionaryResponse,
     ProductImageResponse,
     ProductListResponse,
     ProductResponse,
     ProductStatsResponse,
     ProductUpdateRequest,
 )
+from app.services.image_processing import ProductImageProcessor
 
 settings = get_settings()
 
@@ -108,6 +114,9 @@ def _normalize_field_value(field: FieldDefinition, value: object) -> object:
 
 
 class ProductCatalogService:
+    def __init__(self) -> None:
+        self.image_processor = ProductImageProcessor()
+
     async def _get_product(self, session: AsyncSession, product_id: UUID) -> Product:
         product = await session.get(Product, product_id)
         if product is None:
@@ -184,6 +193,72 @@ class ProductCatalogService:
             else:
                 current.value = normalized
 
+    async def _ensure_dictionary_entries(
+        self,
+        session: AsyncSession,
+        *,
+        tenant_id: UUID,
+        category: str | None,
+        brand: str | None,
+    ) -> None:
+        for kind, name in (("category", category), ("brand", brand)):
+            if not name:
+                continue
+            await session.execute(
+                pg_insert(ProductDictionaryEntry)
+                .values(tenant_id=tenant_id, kind=kind, name=name, status="active")
+                .on_conflict_do_nothing()
+            )
+
+    async def list_dictionary_entries(
+        self,
+        session: AsyncSession,
+        *,
+        kind: str | None,
+    ) -> list[ProductDictionaryResponse]:
+        filters = [ProductDictionaryEntry.status == "active"]
+        if kind:
+            filters.append(ProductDictionaryEntry.kind == kind)
+        entries = list(
+            await session.scalars(
+                select(ProductDictionaryEntry)
+                .where(*filters)
+                .order_by(ProductDictionaryEntry.kind, func.lower(ProductDictionaryEntry.name))
+            )
+        )
+        return [ProductDictionaryResponse.model_validate(entry) for entry in entries]
+
+    async def create_dictionary_entry(
+        self,
+        session: AsyncSession,
+        *,
+        tenant_id: UUID,
+        payload: ProductDictionaryCreateRequest,
+    ) -> ProductDictionaryResponse:
+        await session.execute(
+            pg_insert(ProductDictionaryEntry)
+            .values(
+                tenant_id=tenant_id,
+                kind=payload.kind.value,
+                name=payload.name,
+                status="active",
+            )
+            .on_conflict_do_nothing()
+        )
+        entry = await session.scalar(
+            select(ProductDictionaryEntry).where(
+                ProductDictionaryEntry.kind == payload.kind.value,
+                func.lower(ProductDictionaryEntry.name) == payload.name.lower(),
+            )
+        )
+        if entry is None:
+            raise ConflictError("分类或品牌字典项创建失败。")
+        if entry.status != "active":
+            entry.status = "active"
+            entry.name = payload.name
+            await session.flush()
+        return ProductDictionaryResponse.model_validate(entry)
+
     async def create_product(
         self,
         session: AsyncSession,
@@ -208,6 +283,12 @@ class ProductCatalogService:
         session.add(product)
         try:
             await session.flush()
+            await self._ensure_dictionary_entries(
+                session,
+                tenant_id=tenant_id,
+                category=product.category,
+                brand=product.brand,
+            )
             await self._apply_custom_fields(
                 session,
                 product=product,
@@ -248,6 +329,12 @@ class ProductCatalogService:
             await self._apply_custom_fields(
                 session, product=product, values=payload.custom_fields
             )
+        await self._ensure_dictionary_entries(
+            session,
+            tenant_id=product.tenant_id,
+            category=product.category,
+            brand=product.brand,
+        )
         try:
             await session.flush()
         except IntegrityError as exc:
@@ -361,6 +448,7 @@ class ProductCatalogService:
         search: str | None,
         status: str | None,
         category: str | None,
+        brand: str | None,
         page: int,
         page_size: int,
     ) -> ProductListResponse:
@@ -372,15 +460,52 @@ class ProductCatalogService:
             filters.append(Product.status == status)
         if category:
             filters.append(Product.category == category)
+        if brand:
+            filters.append(Product.brand == brand)
 
         total = int(
             await session.scalar(select(func.count()).select_from(Product).where(*filters)) or 0
         )
+        import_order = (
+            select(
+                ImportRow.tenant_id.label("tenant_id"),
+                ImportRow.product_id.label("product_id"),
+                ImportRow.updated_at.label("imported_at"),
+                ImportRow.source_sheet.label("source_sheet"),
+                ImportRow.source_row.label("source_row"),
+                func.row_number()
+                .over(
+                    partition_by=(ImportRow.tenant_id, ImportRow.product_id),
+                    order_by=(
+                        ImportRow.updated_at.desc(),
+                        ImportRow.source_sheet.desc(),
+                        ImportRow.source_row.desc(),
+                    ),
+                )
+                .label("position"),
+            )
+            .where(ImportRow.status == "imported", ImportRow.product_id.is_not(None))
+            .subquery()
+        )
         products = list(
             await session.scalars(
                 select(Product)
+                .outerjoin(
+                    import_order,
+                    and_(
+                        import_order.c.tenant_id == Product.tenant_id,
+                        import_order.c.product_id == Product.id,
+                        import_order.c.position == 1,
+                    ),
+                )
                 .where(*filters)
-                .order_by(Product.updated_at.desc(), Product.created_at.desc())
+                .order_by(
+                    func.coalesce(import_order.c.imported_at, Product.created_at).desc(),
+                    import_order.c.source_sheet.desc().nulls_last(),
+                    import_order.c.source_row.desc().nulls_last(),
+                    Product.created_at.desc(),
+                    Product.id.desc(),
+                )
                 .offset((page - 1) * page_size)
                 .limit(page_size)
             )
@@ -432,13 +557,22 @@ class ProductCatalogService:
             filters.append(ProductImage.product_id == product_id)
         if image_type:
             filters.append(ProductImage.image_type == image_type)
+        original_file = aliased(StoredFile, name="original_file")
+        processed_file = aliased(StoredFile, name="processed_file")
         statement = (
-            select(ProductImage, StoredFile, Product)
+            select(ProductImage, original_file, Product, processed_file)
             .join(
-                StoredFile,
+                original_file,
                 and_(
-                    StoredFile.tenant_id == ProductImage.tenant_id,
-                    StoredFile.id == ProductImage.stored_file_id,
+                    original_file.tenant_id == ProductImage.tenant_id,
+                    original_file.id == ProductImage.stored_file_id,
+                ),
+            )
+            .outerjoin(
+                processed_file,
+                and_(
+                    processed_file.tenant_id == ProductImage.tenant_id,
+                    processed_file.id == ProductImage.processed_file_id,
                 ),
             )
             .join(
@@ -531,6 +665,14 @@ class ProductCatalogService:
         if duplicate is not None:
             raise ConflictError("该产品已经关联同一图片和图片类型。")
 
+        processed_file, background_removed = (
+            await self.image_processor.ensure_transparent_variant(
+                session,
+                tenant_id=tenant_id,
+                original=stored_file,
+            )
+        )
+
         image_count = int(
             await session.scalar(
                 select(func.count())
@@ -550,6 +692,8 @@ class ProductCatalogService:
             tenant_id=tenant_id,
             product_id=product.id,
             stored_file_id=stored_file.id,
+            processed_file_id=processed_file.id,
+            background_removed=background_removed,
             image_type=image_type.value,
             sort_order=image_count,
             is_primary=make_primary,
@@ -559,7 +703,7 @@ class ProductCatalogService:
         )
         session.add(product_image)
         await session.flush()
-        return self._image_response(product_image, stored_file, product)
+        return self._image_response(product_image, stored_file, product, processed_file)
 
     async def update_image(
         self,
@@ -570,14 +714,23 @@ class ProductCatalogService:
         sort_order: int | None,
         is_primary: bool | None,
     ) -> ProductImageResponse:
+        original_file = aliased(StoredFile, name="original_file")
+        processed_file = aliased(StoredFile, name="processed_file")
         row = (
             await session.execute(
-                select(ProductImage, StoredFile, Product)
+                select(ProductImage, original_file, Product, processed_file)
                 .join(
-                    StoredFile,
+                    original_file,
                     and_(
-                        StoredFile.tenant_id == ProductImage.tenant_id,
-                        StoredFile.id == ProductImage.stored_file_id,
+                        original_file.tenant_id == ProductImage.tenant_id,
+                        original_file.id == ProductImage.stored_file_id,
+                    ),
+                )
+                .outerjoin(
+                    processed_file,
+                    and_(
+                        processed_file.tenant_id == ProductImage.tenant_id,
+                        processed_file.id == ProductImage.processed_file_id,
                     ),
                 )
                 .join(
@@ -592,7 +745,7 @@ class ProductCatalogService:
         ).one_or_none()
         if row is None:
             raise NotFoundError("产品图片不存在。")
-        product_image, stored_file, product = row
+        product_image, stored_file, product, processed = row
         if is_primary is True:
             await session.execute(
                 update(ProductImage)
@@ -610,19 +763,50 @@ class ProductCatalogService:
             await session.flush()
         except IntegrityError as exc:
             raise ConflictError("图片类型调整后产生了重复关联。") from exc
-        return self._image_response(product_image, stored_file, product)
+        return self._image_response(product_image, stored_file, product, processed)
+
+    async def delete_image(self, session: AsyncSession, *, image_id: UUID) -> None:
+        product_image = await session.get(ProductImage, image_id)
+        if product_image is None:
+            raise NotFoundError("产品图片不存在。")
+
+        product_id = product_image.product_id
+        await session.delete(product_image)
+        await session.flush()
+
+        remaining = list(
+            await session.scalars(
+                select(ProductImage)
+                .where(ProductImage.product_id == product_id)
+                .order_by(ProductImage.sort_order, ProductImage.created_at, ProductImage.id)
+            )
+        )
+        if remaining and not any(image.is_primary for image in remaining):
+            remaining[0].is_primary = True
+        for index, image in enumerate(remaining):
+            image.sort_order = index
+        await session.flush()
 
     async def get_image_file(
-        self, session: AsyncSession, image_id: UUID
+        self, session: AsyncSession, image_id: UUID, *, processed: bool = False
     ) -> tuple[Path, StoredFile]:
+        original_file = aliased(StoredFile, name="original_file")
+        processed_file = aliased(StoredFile, name="processed_file")
         row = (
             await session.execute(
-                select(ProductImage, StoredFile)
+                select(ProductImage, original_file, processed_file)
                 .join(
-                    StoredFile,
+                    original_file,
                     and_(
-                        StoredFile.tenant_id == ProductImage.tenant_id,
-                        StoredFile.id == ProductImage.stored_file_id,
+                        original_file.tenant_id == ProductImage.tenant_id,
+                        original_file.id == ProductImage.stored_file_id,
+                    ),
+                )
+                .outerjoin(
+                    processed_file,
+                    and_(
+                        processed_file.tenant_id == ProductImage.tenant_id,
+                        processed_file.id == ProductImage.processed_file_id,
                     ),
                 )
                 .where(ProductImage.id == image_id)
@@ -630,7 +814,8 @@ class ProductCatalogService:
         ).one_or_none()
         if row is None:
             raise NotFoundError("产品图片不存在。")
-        _, stored_file = row
+        _, original, transparent = row
+        stored_file = transparent if processed and transparent is not None else original
         path = (settings.storage_root / stored_file.storage_key).resolve()
         if settings.storage_root.resolve() not in path.parents or not path.is_file():
             raise NotFoundError("图片文件不存在。")
@@ -638,7 +823,10 @@ class ProductCatalogService:
 
     @staticmethod
     def _image_response(
-        product_image: ProductImage, stored_file: StoredFile, product: Product
+        product_image: ProductImage,
+        stored_file: StoredFile,
+        product: Product,
+        processed_file: StoredFile | None,
     ) -> ProductImageResponse:
         return ProductImageResponse(
             id=product_image.id,
@@ -662,5 +850,15 @@ class ProductCatalogService:
             match_confidence=float(product_image.match_confidence),
             match_source=product_image.match_source,
             content_url=f"/api/v1/product-images/{product_image.id}/content",
+            processed_content_url=(
+                f"/api/v1/product-images/{product_image.id}/processed-content"
+                if processed_file is not None
+                else None
+            ),
+            processed_sha256=processed_file.sha256 if processed_file is not None else None,
+            processed_mime_type=(
+                processed_file.mime_type if processed_file is not None else None
+            ),
+            background_removed=product_image.background_removed,
             created_at=product_image.created_at,
         )

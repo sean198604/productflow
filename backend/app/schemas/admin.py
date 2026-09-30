@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class AdminOverviewResponse(BaseModel):
@@ -47,6 +47,16 @@ class AdminUserListResponse(BaseModel):
     total: int
     page: int
     page_size: int
+
+
+class AdminPasswordResetRequest(BaseModel):
+    new_password: str = Field(min_length=12, max_length=128)
+
+
+class AdminPasswordResetResponse(BaseModel):
+    user_id: UUID
+    username: str
+    sessions_revoked: bool = True
 
 
 class AdminProductItem(BaseModel):

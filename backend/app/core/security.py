@@ -16,6 +16,7 @@ class AccessTokenClaims:
     user_id: UUID
     tenant_id: UUID
     role: str
+    token_version: int
 
 
 class InvalidAccessTokenError(ValueError):
@@ -40,7 +41,9 @@ def password_needs_rehash(password_hash: str) -> bool:
         return True
 
 
-def create_access_token(*, user_id: UUID, tenant_id: UUID, role: str) -> tuple[str, int]:
+def create_access_token(
+    *, user_id: UUID, tenant_id: UUID, role: str, token_version: int = 0
+) -> tuple[str, int]:
     settings = get_settings()
     issued_at = datetime.now(UTC)
     expires_at = issued_at + timedelta(minutes=settings.jwt_access_token_minutes)
@@ -48,6 +51,7 @@ def create_access_token(*, user_id: UUID, tenant_id: UUID, role: str) -> tuple[s
         "sub": str(user_id),
         "tid": str(tenant_id),
         "role": role,
+        "ver": token_version,
         "typ": "access",
         "jti": str(uuid4()),
         "iat": issued_at,
@@ -76,6 +80,7 @@ def decode_access_token(token: str) -> AccessTokenClaims:
             user_id=UUID(payload["sub"]),
             tenant_id=UUID(payload["tid"]),
             role=str(payload["role"]),
+            token_version=int(payload.get("ver", 0)),
         )
     except (jwt.PyJWTError, KeyError, TypeError, ValueError) as exc:
         raise InvalidAccessTokenError("Invalid access token") from exc

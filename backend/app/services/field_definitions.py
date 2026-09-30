@@ -19,7 +19,14 @@ async def seed_default_field_definitions(session: AsyncSession, tenant_id: UUID)
     for index, field in enumerate(DEFAULT_PRODUCT_FIELDS, start=1):
         if field.code in existing_codes:
             continue
-        options = {"choices": ["USD", "EUR", "GBP", "CNY"]} if field.code == "currency" else {}
+        if field.code == "currency":
+            options = {"choices": ["JPY", "USD", "EUR", "GBP", "CNY"]}
+        elif field.code == "price":
+            options = {"currency": "JPY"}
+        elif field.code == "price_usd":
+            options = {"currency": "USD"}
+        else:
+            options = {}
         session.add(
             FieldDefinition(
                 tenant_id=tenant_id,

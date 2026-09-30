@@ -39,6 +39,36 @@ class ImageType(StrEnum):
     OTHER = "other"
 
 
+class ProductDictionaryKind(StrEnum):
+    CATEGORY = "category"
+    BRAND = "brand"
+
+
+class ProductDictionaryCreateRequest(BaseModel):
+    kind: ProductDictionaryKind
+    name: str = Field(min_length=1, max_length=160)
+
+    @field_validator("name")
+    @classmethod
+    def normalize_name(cls, value: str) -> str:
+        return value.strip()
+
+
+class ProductDictionaryResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    kind: ProductDictionaryKind
+    name: str
+    status: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class ProductDictionaryListResponse(BaseModel):
+    items: list[ProductDictionaryResponse]
+
+
 class FieldDefinitionCreateRequest(BaseModel):
     code: str = Field(min_length=1, max_length=80)
     label: str = Field(min_length=1, max_length=160)
@@ -70,6 +100,19 @@ class FieldDefinitionCreateRequest(BaseModel):
                 or not all(isinstance(choice, str) and choice.strip() for choice in choices)
             ):
                 raise ValueError("options.choices must be a list of non-empty strings")
+        currency = self.options.get("currency")
+        if currency is not None:
+            normalized_currency = str(currency).strip().upper()
+            if not re.fullmatch(r"[A-Z]{3}", normalized_currency):
+                raise ValueError("options.currency must be a three-letter ISO currency code")
+            if self.data_type != FieldDataType.MONEY:
+                raise ValueError("options.currency can only be used by money fields")
+            expected_code = (
+                "price" if normalized_currency == "JPY" else f"price_{normalized_currency.lower()}"
+            )
+            if self.code != expected_code:
+                raise ValueError(f"{normalized_currency} 报价字段代码必须是 {expected_code}")
+            self.options = {**self.options, "currency": normalized_currency}
         return self
 
 
@@ -144,6 +187,14 @@ class ProductUpdateRequest(BaseModel):
     def strip_text(cls, value: str | None) -> str | None:
         return value.strip() if value is not None else None
 
+    @field_validator("description", "category", "brand")
+    @classmethod
+    def strip_optional_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        stripped = value.strip()
+        return stripped or None
+
 
 class ProductResponse(BaseModel):
     id: UUID
@@ -205,6 +256,10 @@ class ProductImageResponse(BaseModel):
     match_confidence: float
     match_source: str
     content_url: str
+    processed_content_url: str | None
+    processed_sha256: str | None
+    processed_mime_type: str | None
+    background_removed: bool
     created_at: datetime
 
 

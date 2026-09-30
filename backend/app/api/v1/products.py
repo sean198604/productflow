@@ -8,6 +8,10 @@ from app.api.dependencies import AuthContext, get_auth_context
 from app.schemas.catalog import (
     ImageType,
     ProductCreateRequest,
+    ProductDictionaryCreateRequest,
+    ProductDictionaryKind,
+    ProductDictionaryListResponse,
+    ProductDictionaryResponse,
     ProductImageListResponse,
     ProductImageResponse,
     ProductImageUpdateRequest,
@@ -42,6 +46,7 @@ async def list_products(
         str | None, Query(alias="status", pattern=r"^(draft|active|archived)$")
     ] = None,
     category: Annotated[str | None, Query(max_length=160)] = None,
+    brand: Annotated[str | None, Query(max_length=160)] = None,
     page: Annotated[int, Query(ge=1)] = 1,
     page_size: Annotated[int, Query(ge=1, le=100)] = 20,
 ) -> ProductListResponse:
@@ -50,6 +55,7 @@ async def list_products(
         search=search,
         status=status_filter,
         category=category,
+        brand=brand,
         page=page,
         page_size=page_size,
     )
@@ -106,6 +112,36 @@ async def list_product_images(
     return ProductImageListResponse(items=items, total=total)
 
 
+@router.get("/product-dictionaries", response_model=ProductDictionaryListResponse)
+async def list_product_dictionaries(
+    context: Annotated[AuthContext, Depends(get_auth_context, scope="function")],
+    service: Annotated[ProductCatalogService, Depends(get_service)],
+    kind: ProductDictionaryKind | None = None,
+) -> ProductDictionaryListResponse:
+    items = await service.list_dictionary_entries(
+        context.session,
+        kind=kind.value if kind else None,
+    )
+    return ProductDictionaryListResponse(items=items)
+
+
+@router.post(
+    "/product-dictionaries",
+    response_model=ProductDictionaryResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_product_dictionary(
+    payload: ProductDictionaryCreateRequest,
+    context: Annotated[AuthContext, Depends(get_auth_context, scope="function")],
+    service: Annotated[ProductCatalogService, Depends(get_service)],
+) -> ProductDictionaryResponse:
+    return await service.create_dictionary_entry(
+        context.session,
+        tenant_id=context.tenant.id,
+        payload=payload,
+    )
+
+
 @router.post(
     "/products/{product_id}/images",
     response_model=ProductImageResponse,
@@ -160,6 +196,15 @@ async def update_product_image(
     )
 
 
+@router.delete("/product-images/{image_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_product_image(
+    image_id: UUID,
+    context: Annotated[AuthContext, Depends(get_auth_context, scope="function")],
+    service: Annotated[ProductCatalogService, Depends(get_service)],
+) -> None:
+    await service.delete_image(context.session, image_id=image_id)
+
+
 @router.get("/product-images/{image_id}/content", response_class=FileResponse)
 async def get_product_image_content(
     image_id: UUID,
@@ -167,6 +212,26 @@ async def get_product_image_content(
     service: Annotated[ProductCatalogService, Depends(get_service)],
 ) -> FileResponse:
     path, stored_file = await service.get_image_file(context.session, image_id)
+    return FileResponse(
+        path,
+        media_type=stored_file.mime_type,
+        filename=stored_file.safe_filename,
+        content_disposition_type="inline",
+        headers={"Cache-Control": "private, max-age=300"},
+    )
+
+
+@router.get("/product-images/{image_id}/processed-content", response_class=FileResponse)
+async def get_processed_product_image_content(
+    image_id: UUID,
+    context: Annotated[AuthContext, Depends(get_auth_context, scope="function")],
+    service: Annotated[ProductCatalogService, Depends(get_service)],
+) -> FileResponse:
+    path, stored_file = await service.get_image_file(
+        context.session,
+        image_id,
+        processed=True,
+    )
     return FileResponse(
         path,
         media_type=stored_file.mime_type,

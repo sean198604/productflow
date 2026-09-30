@@ -2,7 +2,7 @@ from hashlib import sha256
 from io import BytesIO
 
 from fastapi.testclient import TestClient
-from PIL import Image
+from PIL import Image, ImageDraw
 
 from tests.conftest import IdentityFixture
 
@@ -90,6 +90,25 @@ def test_field_definitions_and_product_crud(
     assert listed.json()["total"] == 1
     assert listed.json()["items"][0]["id"] == product["id"]
 
+    dictionaries = client.get("/api/v1/product-dictionaries", headers=member_headers)
+    assert dictionaries.status_code == 200
+    assert {(item["kind"], item["name"]) for item in dictionaries.json()["items"]} >= {
+        ("category", "Lighting"),
+        ("brand", "ProductFlow"),
+    }
+    filtered_by_brand = client.get(
+        "/api/v1/products?brand=ProductFlow", headers=member_headers
+    )
+    assert filtered_by_brand.status_code == 200
+    assert filtered_by_brand.json()["total"] == 1
+
+    custom_dictionary = client.post(
+        "/api/v1/product-dictionaries",
+        headers=owner_headers,
+        json={"kind": "brand", "name": "New Brand"},
+    )
+    assert custom_dictionary.status_code == 201
+
     invalid_value = client.patch(
         f"/api/v1/products/{product['id']}",
         headers=owner_headers,
@@ -100,10 +119,23 @@ def test_field_definitions_and_product_crud(
     updated = client.patch(
         f"/api/v1/products/{product['id']}",
         headers=owner_headers,
-        json={"description": "Weather-resistant outdoor wall light."},
+        json={
+            "description": "Weather-resistant outdoor wall light.",
+            "brand": "Renamed Brand",
+        },
     )
     assert updated.status_code == 200
     assert updated.json()["description"] == "Weather-resistant outdoor wall light."
+    assert updated.json()["brand"] == "Renamed Brand"
+
+    brand_dictionary = client.get(
+        "/api/v1/product-dictionaries?kind=brand", headers=member_headers
+    )
+    assert {item["name"] for item in brand_dictionary.json()["items"]} >= {
+        "ProductFlow",
+        "New Brand",
+        "Renamed Brand",
+    }
 
     fetched_after_update = client.get(
         f"/api/v1/products/{product['id']}", headers=member_headers
@@ -134,7 +166,9 @@ def test_product_image_upload_metadata_and_content(
     product_id = product_response.json()["id"]
 
     buffer = BytesIO()
-    Image.new("RGB", (32, 24), color=(26, 54, 93)).save(buffer, format="PNG")
+    source = Image.new("RGB", (32, 24), color="white")
+    ImageDraw.Draw(source).rectangle((8, 6, 23, 17), fill=(26, 54, 93))
+    source.save(buffer, format="PNG")
     image_bytes = buffer.getvalue()
     uploaded = client.post(
         f"/api/v1/products/{product_id}/images",
@@ -153,11 +187,23 @@ def test_product_image_upload_metadata_and_content(
     assert image["is_primary"] is True
     assert image["match_method"] == "manual"
     assert image["match_confidence"] == 1.0
+    assert image["processed_content_url"].endswith("/processed-content")
+    assert image["processed_mime_type"] == "image/png"
+    assert image["processed_sha256"]
+    assert image["background_removed"] is True
 
     content = client.get(image["content_url"], headers=headers)
     assert content.status_code == 200
     assert content.headers["content-type"] == "image/png"
     assert content.content == image_bytes
+
+    processed = client.get(image["processed_content_url"], headers=headers)
+    assert processed.status_code == 200
+    assert processed.headers["content-type"] == "image/png"
+    with Image.open(BytesIO(processed.content)) as transparent:
+        assert transparent.mode == "RGBA"
+        assert transparent.getpixel((0, 0))[3] == 0
+        assert transparent.getchannel("A").getextrema()[1] == 255
 
     library = client.get("/api/v1/product-images?image_type=main", headers=headers)
     assert library.status_code == 200
@@ -171,9 +217,34 @@ def test_product_image_upload_metadata_and_content(
     )
     assert duplicate.status_code == 409
 
+    second_buffer = BytesIO()
+    Image.new("RGB", (24, 32), color=(26, 54, 93)).save(second_buffer, format="PNG")
+    second = client.post(
+        f"/api/v1/products/{product_id}/images",
+        headers=headers,
+        files={"image": ("side.png", second_buffer.getvalue(), "image/png")},
+        data={"image_type": "detail"},
+    )
+    assert second.status_code == 201, second.text
+    assert second.json()["is_primary"] is False
+
+    deleted_image = client.delete(
+        f"/api/v1/product-images/{image['id']}", headers=headers
+    )
+    assert deleted_image.status_code == 204, deleted_image.text
+    images_after_delete = client.get(
+        f"/api/v1/products/{product_id}/images", headers=headers
+    )
+    assert images_after_delete.status_code == 200
+    assert images_after_delete.json()["total"] == 1
+    assert images_after_delete.json()["items"][0]["id"] == second.json()["id"]
+    assert images_after_delete.json()["items"][0]["is_primary"] is True
+    missing_deleted_image = client.get(image["content_url"], headers=headers)
+    assert missing_deleted_image.status_code == 404
+
     deleted = client.delete(f"/api/v1/products/{product_id}", headers=headers)
     assert deleted.status_code == 204, deleted.text
     missing_product = client.get(f"/api/v1/products/{product_id}", headers=headers)
     assert missing_product.status_code == 404
-    missing_image = client.get(image["content_url"], headers=headers)
+    missing_image = client.get(second.json()["content_url"], headers=headers)
     assert missing_image.status_code == 404

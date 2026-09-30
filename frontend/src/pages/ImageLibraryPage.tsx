@@ -35,7 +35,7 @@ export function ImageLibraryPage() {
       <PageHeader
         eyebrow="Product Assets"
         title="产品图片库"
-        description="查看图片类型、文件指纹、尺寸以及与产品的关联。重复文件通过 SHA256 识别。"
+        description="查看自动生成的透明 PNG、图片类型、文件指纹以及产品关联。原始文件始终保留。"
         actions={
           <select
             className="input w-40"
@@ -64,9 +64,9 @@ export function ImageLibraryPage() {
                   : ""
               }`}
             >
-              <div className="relative">
+              <div className="relative bg-[linear-gradient(45deg,#f1f5f9_25%,transparent_25%),linear-gradient(-45deg,#f1f5f9_25%,transparent_25%),linear-gradient(45deg,transparent_75%,#f1f5f9_75%),linear-gradient(-45deg,transparent_75%,#f1f5f9_75%)] bg-[length:16px_16px]">
                 <ProtectedImage
-                  src={image.content_url}
+                  src={image.processed_content_url ?? image.content_url}
                   alt={image.original_filename}
                   className="aspect-[4/3] w-full bg-white"
                 />
@@ -76,6 +76,11 @@ export function ImageLibraryPage() {
                 {image.is_primary ? (
                   <span className="absolute right-3 top-3 inline-flex items-center gap-1 rounded-full bg-amber-400 px-2.5 py-1 text-[11px] font-black text-amber-950 shadow-md">
                     <Star className="size-3.5 fill-current" aria-hidden="true" /> 主图
+                  </span>
+                ) : null}
+                {image.processed_content_url ? (
+                  <span className="absolute bottom-3 left-3 rounded-full bg-emerald-600 px-2 py-1 text-[10px] font-bold text-white">
+                    {image.background_removed ? "已去白底" : "附件 PNG"}
                   </span>
                 ) : null}
               </div>

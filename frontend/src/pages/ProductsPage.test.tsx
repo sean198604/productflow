@@ -11,8 +11,14 @@ describe("ProductsPage", () => {
   });
 
   it("renders products returned by the tenant-scoped API", async () => {
-    vi.spyOn(window, "fetch").mockResolvedValue(
-      new Response(
+    vi.spyOn(window, "fetch").mockImplementation((input) => {
+      if (String(input).includes("/product-dictionaries")) {
+        return Promise.resolve(Response.json({ items: [
+          { id: "category-id", kind: "category", name: "Lighting", status: "active", created_at: "2026-09-25T00:00:00Z", updated_at: "2026-09-25T00:00:00Z" },
+          { id: "brand-id", kind: "brand", name: "ProductFlow", status: "active", created_at: "2026-09-25T00:00:00Z", updated_at: "2026-09-25T00:00:00Z" },
+        ] }));
+      }
+      return Promise.resolve(new Response(
         JSON.stringify({
           items: [
             {
@@ -36,8 +42,8 @@ describe("ProductsPage", () => {
           page_size: 20,
         }),
         { status: 200, headers: { "Content-Type": "application/json" } },
-      ),
-    );
+      ));
+    });
 
     render(
       <MemoryRouter>
@@ -50,5 +56,7 @@ describe("ProductsPage", () => {
     await waitFor(() => expect(screen.getByText("Outdoor Wall Light")).toBeInTheDocument());
     expect(screen.getByText("PF-001")).toBeInTheDocument();
     expect(screen.getByText("共 1 个产品")).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "Lighting" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "ProductFlow" })).toBeInTheDocument();
   });
 });

@@ -39,6 +39,7 @@ services:
     environment:
       APP_ENV: ${APP_ENV:-development}
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-productflow}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-productflow}
+      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env}
     networks:
       - productflow_internal
     depends_on:
@@ -72,6 +73,7 @@ services:
     environment:
       APP_ENV: ${APP_ENV:-development}
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-productflow}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-productflow}
+      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env}
       INITIAL_ADMIN_ENABLED: ${INITIAL_ADMIN_ENABLED:-false}
       INITIAL_ADMIN_TENANT_NAME: ${INITIAL_ADMIN_TENANT_NAME:-ProductFlow System}
       INITIAL_ADMIN_TENANT_SLUG: ${INITIAL_ADMIN_TENANT_SLUG:-productflow-admin}

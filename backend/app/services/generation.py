@@ -5,14 +5,17 @@ import re
 import shutil
 from copy import deepcopy
 from datetime import UTC, datetime
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from uuid import UUID, uuid4
 
 from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from app.core.config import get_settings
 from app.core.errors import BadRequestError, NotFoundError
+from app.domain.currencies import currency_symbol, price_field_for_currency
 from app.models import (
     Customer,
     CustomerSetting,
@@ -47,6 +50,20 @@ CORE_VALUE_COLUMNS = {
     "category": "category",
     "brand": "brand",
 }
+
+
+def _has_price(value: object) -> bool:
+    return value is not None and str(value).strip() != ""
+
+
+def _formatted_price(value: object, currency: str, symbol: str | None = None) -> str:
+    try:
+        amount = Decimal(str(value))
+        decimals = 0 if currency == "JPY" else 2
+        rendered = f"{amount:,.{decimals}f}"
+    except (InvalidOperation, ValueError):
+        rendered = str(value).strip()
+    return f"{currency} {symbol if symbol is not None else currency_symbol(currency)}{rendered}"
 
 
 class GenerationService:
@@ -147,6 +164,8 @@ class GenerationService:
         session: AsyncSession,
         products: list[Product],
         allowed_fields: dict[str, FieldDefinition],
+        quote_currencies: list[str],
+        currency_symbols: dict[str, str],
     ) -> list[dict]:
         ids = [product.id for product in products]
         value_rows = (
@@ -173,14 +192,23 @@ class GenerationService:
         values_by_product: dict[UUID, dict] = {product.id: {} for product in products}
         for product_id, code, value in value_rows:
             values_by_product[product_id][code] = value
+        original_file = aliased(StoredFile, name="original_file")
+        processed_file = aliased(StoredFile, name="processed_file")
         image_rows = (
             await session.execute(
-                select(ProductImage, StoredFile)
+                select(ProductImage, original_file, processed_file)
                 .join(
-                    StoredFile,
+                    original_file,
                     and_(
-                        StoredFile.tenant_id == ProductImage.tenant_id,
-                        StoredFile.id == ProductImage.stored_file_id,
+                        original_file.tenant_id == ProductImage.tenant_id,
+                        original_file.id == ProductImage.stored_file_id,
+                    ),
+                )
+                .outerjoin(
+                    processed_file,
+                    and_(
+                        processed_file.tenant_id == ProductImage.tenant_id,
+                        processed_file.id == ProductImage.processed_file_id,
                     ),
                 )
                 .where(ProductImage.product_id.in_(ids))
@@ -192,7 +220,8 @@ class GenerationService:
             )
         ).all()
         images_by_product: dict[UUID, list[dict]] = {product.id: [] for product in products}
-        for image, stored_file in image_rows:
+        for image, source_file, transparent_file in image_rows:
+            stored_file = transparent_file or source_file
             images_by_product[image.product_id].append(
                 {
                     "id": str(image.id),
@@ -200,12 +229,14 @@ class GenerationService:
                     "is_primary": image.is_primary,
                     "sort_order": image.sort_order,
                     "stored_file_id": str(stored_file.id),
+                    "source_stored_file_id": str(source_file.id),
                     "storage_key": stored_file.storage_key,
                     "sha256": stored_file.sha256,
                     "mime_type": stored_file.mime_type,
                     "width": stored_file.width,
                     "height": stored_file.height,
                     "original_filename": stored_file.original_filename,
+                    "background_removed": image.background_removed,
                 }
             )
         snapshots: list[dict] = []
@@ -218,12 +249,57 @@ class GenerationService:
             for code, value in values_by_product[product.id].items():
                 if code in allowed_fields:
                     fields[code] = value
+            pricing = [
+                {
+                    "currency": currency,
+                    "amount": values_by_product[product.id].get(
+                        price_field_for_currency(currency)
+                    ),
+                    "source_field": price_field_for_currency(currency),
+                }
+                for currency in quote_currencies
+            ]
+            available_prices = [item for item in pricing if _has_price(item["amount"])]
+            # The currency selector is authoritative. Currency-specific fields retain
+            # only their selected value and never fall back to another market's price.
+            for code, definition in allowed_fields.items():
+                if definition.data_type == "money" and definition.options.get("currency"):
+                    field_currency = str(definition.options["currency"]).upper()
+                    fields[code] = (
+                        values_by_product[product.id].get(code)
+                        if field_currency in quote_currencies
+                        else None
+                    )
+            if len(quote_currencies) == 1:
+                combined_price = pricing[0]["amount"]
+            else:
+                combined_price = "\n".join(
+                    _formatted_price(
+                        item["amount"],
+                        item["currency"],
+                        currency_symbols.get(item["currency"]),
+                    )
+                    for item in available_prices
+                ) or None
+            for alias in ("price", "selling_price"):
+                if alias in allowed_fields:
+                    fields[alias] = combined_price
+            if "currency" in allowed_fields:
+                fields["currency"] = " / ".join(quote_currencies)
+            primary_price = pricing[0]
             snapshots.append(
                 {
                     "product_id": str(product.id),
                     "sku": product.sku,
                     "product_name": product.product_name,
                     "fields": fields,
+                    "pricing": {
+                        "currency": primary_price["currency"],
+                        "amount": primary_price["amount"],
+                        "source_field": primary_price["source_field"],
+                        "selected_currencies": quote_currencies,
+                        "currencies": pricing,
+                    },
                     "images": images_by_product[product.id],
                     "captured_at": datetime.now(UTC).isoformat(),
                 }
@@ -357,7 +433,14 @@ class GenerationService:
                 f"模板映射仅配置了 {capacity} 个产品槽位，当前选择了 {len(products)} 个产品。"
             )
 
-        product_snapshot = await self._product_snapshots(session, products, allowed_fields)
+        quote_currencies = payload.output_parameters["currencies"]
+        product_snapshot = await self._product_snapshots(
+            session,
+            products,
+            allowed_fields,
+            quote_currencies,
+            payload.output_parameters["currency_symbols"],
+        )
         customer_snapshot = await self._customer_snapshot(session, customer)
         self._validate_customer_output_fields(customer_snapshot, allowed_fields)
         product_set_snapshot = self._product_set_snapshot(product_set, products)
@@ -532,6 +615,10 @@ class GenerationService:
         customer_snapshot = task.customer_snapshot or {}
         product_set_snapshot = task.product_set_snapshot or {}
         template_snapshot = task.template_snapshot or {}
+        output_parameters = task.output_parameters or {}
+        quote_currencies = output_parameters.get("currencies")
+        if not isinstance(quote_currencies, list) or not quote_currencies:
+            quote_currencies = [output_parameters.get("currency", "USD")]
         return GenerationTaskResponse(
             id=task.id,
             tenant_id=task.tenant_id,
@@ -546,6 +633,8 @@ class GenerationService:
             template_name=template_snapshot.get("template_name", ""),
             template_version_number=int(template_snapshot.get("version_number", 0)),
             product_count=len(task.product_snapshot or []),
+            quote_currency=quote_currencies[0],
+            quote_currencies=quote_currencies,
             output_filename=output_file.original_filename if output_file else None,
             download_url=(
                 f"/api/v1/generation-tasks/{task.id}/download"

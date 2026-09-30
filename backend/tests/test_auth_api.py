@@ -181,6 +181,7 @@ def test_platform_admin_can_read_cross_tenant_overview(
         "customer_template_bindings",
         "field_definitions",
         "product_field_values",
+        "product_dictionary_entries",
         "product_images",
         "import_templates",
         "import_rows",
@@ -198,3 +199,55 @@ def test_platform_admin_can_read_cross_tenant_overview(
         )
         assert table_response.status_code == 200, table_response.text
         assert table_response.json()["entity"] == entity
+
+
+def test_platform_admin_can_reset_password_and_revoke_existing_sessions(
+    client: TestClient,
+    identity_fixture: IdentityFixture,
+) -> None:
+    owner_token = login(client, identity_fixture, identity_fixture.owner_email)
+    member_token = login(client, identity_fixture, identity_fixture.member_email)
+    new_password = "ResetPassword456!"
+
+    denied = client.post(
+        f"/api/v1/admin/users/{identity_fixture.owner_id}/reset-password",
+        headers={"Authorization": f"Bearer {member_token}"},
+        json={"new_password": new_password},
+    )
+    assert denied.status_code == 403
+
+    reset = client.post(
+        f"/api/v1/admin/users/{identity_fixture.member_id}/reset-password",
+        headers={"Authorization": f"Bearer {owner_token}"},
+        json={"new_password": new_password},
+    )
+    assert reset.status_code == 200, reset.text
+    assert reset.json() == {
+        "user_id": str(identity_fixture.member_id),
+        "username": identity_fixture.member_email.split("@")[0],
+        "sessions_revoked": True,
+    }
+
+    revoked = client.get(
+        "/api/v1/auth/me",
+        headers={"Authorization": f"Bearer {member_token}"},
+    )
+    assert revoked.status_code == 401
+
+    old_password = client.post(
+        "/api/v1/auth/login",
+        json={
+            "identifier": identity_fixture.member_email,
+            "password": identity_fixture.password,
+        },
+    )
+    assert old_password.status_code == 401
+
+    new_login = client.post(
+        "/api/v1/auth/login",
+        json={
+            "identifier": identity_fixture.member_email,
+            "password": new_password,
+        },
+    )
+    assert new_login.status_code == 200, new_login.text

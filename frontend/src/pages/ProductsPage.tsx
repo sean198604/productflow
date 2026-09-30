@@ -1,4 +1,4 @@
-import { ChevronLeft, ChevronRight, PackageSearch, Plus, Search } from "lucide-react";
+import { ChevronLeft, ChevronRight, PackageSearch, Plus, Search, Tags } from "lucide-react";
 import { type FormEvent, useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 
@@ -8,7 +8,7 @@ import { Modal } from "../components/ui/Modal";
 import { Button } from "../components/ui/button";
 import { Badge, Card, EmptyState, PageHeader } from "../components/ui/primitives";
 import { ApiError, apiRequest } from "../lib/api";
-import type { Product } from "../types/catalog";
+import type { Product, ProductDictionary } from "../types/catalog";
 
 type ProductList = { items: Product[]; total: number; page: number; page_size: number };
 
@@ -19,22 +19,38 @@ export function ProductsPage() {
   const [data, setData] = useState<ProductList>({ items: [], total: 0, page: 1, page_size: 20 });
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("");
+  const [category, setCategory] = useState("");
+  const [brand, setBrand] = useState("");
+  const [dictionaries, setDictionaries] = useState<ProductDictionary[]>([]);
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
+  const [showDictionaries, setShowDictionaries] = useState(false);
+
+  const loadDictionaries = useCallback(() => {
+    apiRequest<{ items: ProductDictionary[] }>("/product-dictionaries")
+      .then((payload) => setDictionaries(payload.items))
+      .catch(() => reportError("分类和品牌字典加载失败。"));
+  }, [reportError]);
 
   const loadProducts = useCallback(() => {
     setLoading(true);
     const params = new URLSearchParams({ page: String(page), page_size: "20" });
     if (search.trim()) params.set("search", search.trim());
     if (status) params.set("status", status);
+    if (category) params.set("category", category);
+    if (brand) params.set("brand", brand);
     apiRequest<ProductList>(`/products?${params}`)
       .then(setData)
       .catch(() => reportError("产品列表加载失败，请稍后重试。"))
       .finally(() => setLoading(false));
-  }, [page, reportError, search, status]);
+  }, [brand, category, page, reportError, search, status]);
 
   useEffect(() => loadProducts(), [loadProducts]);
+  useEffect(() => loadDictionaries(), [loadDictionaries]);
+
+  const categories = dictionaries.filter((item) => item.kind === "category");
+  const brands = dictionaries.filter((item) => item.kind === "brand");
 
   return (
     <div className="space-y-6">
@@ -43,14 +59,19 @@ export function ProductsPage() {
         title="产品资料"
         description="维护标准字段、自定义字段及产品图片。SKU 在每个租户内保持唯一。"
         actions={
-          <Button onClick={() => setShowCreate(true)}>
-            <Plus className="size-4" /> 新建产品
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button variant="secondary" onClick={() => setShowDictionaries(true)}>
+              <Tags className="size-4" /> 分类 / 品牌字典
+            </Button>
+            <Button onClick={() => setShowCreate(true)}>
+              <Plus className="size-4" /> 新建产品
+            </Button>
+          </div>
         }
       />
 
       <Card className="p-4">
-        <div className="flex flex-col gap-3 sm:flex-row">
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-[minmax(280px,1fr)_180px_180px_160px]">
           <label className="relative flex-1">
             <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-slate-400" />
             <input
@@ -61,7 +82,25 @@ export function ProductsPage() {
             />
           </label>
           <select
-            className="input sm:w-40"
+            className="input"
+            aria-label="产品分类"
+            value={category}
+            onChange={(event) => { setCategory(event.target.value); setPage(1); }}
+          >
+            <option value="">全部分类</option>
+            {categories.map((item) => <option key={item.id} value={item.name}>{item.name}</option>)}
+          </select>
+          <select
+            className="input"
+            aria-label="产品品牌"
+            value={brand}
+            onChange={(event) => { setBrand(event.target.value); setPage(1); }}
+          >
+            <option value="">全部品牌</option>
+            {brands.map((item) => <option key={item.id} value={item.name}>{item.name}</option>)}
+          </select>
+          <select
+            className="input"
             aria-label="产品状态"
             value={status}
             onChange={(event) => { setStatus(event.target.value); setPage(1); }}
@@ -131,18 +170,19 @@ export function ProductsPage() {
           <EmptyState
             icon={<PackageSearch className="size-5" />}
             title="没有找到产品"
-            description={search || status ? "调整搜索条件后重试。" : "创建第一个产品并开始维护完整资料。"}
-            action={!search && !status ? <Button onClick={() => setShowCreate(true)}>创建产品</Button> : undefined}
+            description={search || status || category || brand ? "调整搜索条件后重试。" : "创建第一个产品并开始维护完整资料。"}
+            action={!search && !status && !category && !brand ? <Button onClick={() => setShowCreate(true)}>创建产品</Button> : undefined}
           />
         )}
       </div>
 
-      {showCreate ? <CreateProductModal onClose={() => setShowCreate(false)} onCreated={() => { setShowCreate(false); loadProducts(); }} /> : null}
+      {showCreate ? <CreateProductModal dictionaries={dictionaries} onClose={() => setShowCreate(false)} onCreated={() => { setShowCreate(false); loadProducts(); loadDictionaries(); }} /> : null}
+      {showDictionaries ? <DictionaryModal dictionaries={dictionaries} onClose={() => setShowDictionaries(false)} onChanged={loadDictionaries} /> : null}
     </div>
   );
 }
 
-function CreateProductModal({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
+function CreateProductModal({ dictionaries, onClose, onCreated }: { dictionaries: ProductDictionary[]; onClose: () => void; onCreated: () => void }) {
   const [form, setForm] = useState({ sku: "", product_name: "", category: "", brand: "", status: "active" });
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -170,8 +210,8 @@ function CreateProductModal({ onClose, onCreated }: { onClose: () => void; onCre
         </div>
         <label><span className="label">产品名称 *</span><input className="input" required value={form.product_name} onChange={(event) => setForm({ ...form, product_name: event.target.value })} /></label>
         <div className="grid gap-4 sm:grid-cols-2">
-          <label><span className="label">分类</span><input className="input" value={form.category} onChange={(event) => setForm({ ...form, category: event.target.value })} /></label>
-          <label><span className="label">品牌</span><input className="input" value={form.brand} onChange={(event) => setForm({ ...form, brand: event.target.value })} /></label>
+          <DictionaryInput label="分类" listId="create-product-categories" items={dictionaries.filter((item) => item.kind === "category")} value={form.category} onChange={(value) => setForm({ ...form, category: value })} />
+          <DictionaryInput label="品牌" listId="create-product-brands" items={dictionaries.filter((item) => item.kind === "brand")} value={form.brand} onChange={(value) => setForm({ ...form, brand: value })} />
         </div>
         {error ? <p role="alert" className="rounded-lg bg-red-50 px-3 py-2 text-xs text-red-700">{error}</p> : null}
         <div className="flex justify-end gap-2 border-t border-slate-100 pt-4">
@@ -180,5 +220,78 @@ function CreateProductModal({ onClose, onCreated }: { onClose: () => void; onCre
         </div>
       </form>
     </Modal>
+  );
+}
+
+function DictionaryInput({ label, listId, items, value, onChange }: { label: string; listId: string; items: ProductDictionary[]; value: string; onChange: (value: string) => void }) {
+  return (
+    <label>
+      <span className="label">{label}</span>
+      <input className="input" list={listId} value={value} onChange={(event) => onChange(event.target.value)} placeholder={`选择或输入新${label}`} />
+      <datalist id={listId}>{items.map((item) => <option key={item.id} value={item.name} />)}</datalist>
+      <span className="mt-1 block text-[10px] text-slate-400">输入新名称并保存后会自动加入字典。</span>
+    </label>
+  );
+}
+
+function DictionaryModal({ dictionaries, onClose, onChanged }: { dictionaries: ProductDictionary[]; onClose: () => void; onChanged: () => void }) {
+  const [kind, setKind] = useState<"category" | "brand">("category");
+  const [name, setName] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    if (!name.trim()) return;
+    setSubmitting(true);
+    setError(null);
+    try {
+      await apiRequest<ProductDictionary>("/product-dictionaries", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ kind, name: name.trim() }),
+      });
+      setName("");
+      onChanged();
+    } catch (caught) {
+      setError(caught instanceof ApiError ? caught.message : "字典项添加失败。");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  const categories = dictionaries.filter((item) => item.kind === "category");
+  const brands = dictionaries.filter((item) => item.kind === "brand");
+  return (
+    <Modal title="分类与品牌字典" description="产品保存时使用的新分类或品牌也会自动进入这里。" onClose={onClose}>
+      <div className="space-y-5 p-5">
+        <form className="grid gap-3 sm:grid-cols-[140px_minmax(0,1fr)_auto]" onSubmit={submit}>
+          <select className="input" value={kind} onChange={(event) => setKind(event.target.value as "category" | "brand")}>
+            <option value="category">分类</option>
+            <option value="brand">品牌</option>
+          </select>
+          <input className="input" required maxLength={160} placeholder={kind === "category" ? "输入新分类" : "输入新品牌"} value={name} onChange={(event) => setName(event.target.value)} />
+          <Button type="submit" disabled={submitting}><Plus className="size-4" />{submitting ? "添加中…" : "添加"}</Button>
+        </form>
+        {error ? <p role="alert" className="rounded-lg bg-red-50 px-3 py-2 text-xs text-red-700">{error}</p> : null}
+        <div className="grid gap-4 sm:grid-cols-2">
+          <DictionaryGroup title={`分类 · ${categories.length}`} items={categories} />
+          <DictionaryGroup title={`品牌 · ${brands.length}`} items={brands} />
+        </div>
+        <div className="flex justify-end border-t border-slate-100 pt-4"><Button variant="secondary" onClick={onClose}>完成</Button></div>
+      </div>
+    </Modal>
+  );
+}
+
+function DictionaryGroup({ title, items }: { title: string; items: ProductDictionary[] }) {
+  return (
+    <div className="rounded-xl border border-slate-200 p-3">
+      <h3 className="text-xs font-bold text-slate-700">{title}</h3>
+      <div className="mt-3 flex max-h-44 flex-wrap content-start gap-2 overflow-y-auto">
+        {items.map((item) => <span key={item.id} className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-semibold text-slate-600">{item.name}</span>)}
+        {!items.length ? <span className="text-xs text-slate-400">暂无字典项</span> : null}
+      </div>
+    </div>
   );
 }

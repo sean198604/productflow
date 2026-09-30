@@ -1,6 +1,7 @@
 from app.models.catalog import (
     FieldDefinition,
     Product,
+    ProductDictionaryEntry,
     ProductFieldValue,
     ProductImage,
     StoredFile,
@@ -32,6 +33,7 @@ __all__ = [
     "OutputTemplate",
     "OutputTemplateVersion",
     "Product",
+    "ProductDictionaryEntry",
     "ProductFieldValue",
     "ProductImage",
     "ProductSet",

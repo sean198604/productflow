@@ -17,7 +17,13 @@ export type FieldDefinition = {
   is_system: boolean;
   is_core: boolean;
   is_required: boolean;
-  options: { choices?: string[] };
+  options: {
+    choices?: string[];
+    currency?: string;
+    price_basis?: string;
+    source_kind?: string;
+    sources?: string[];
+  };
   sort_order: number;
   status: "active" | "archived";
 };
@@ -34,6 +40,15 @@ export type Product = {
   custom_fields: Record<string, string | number | boolean | string[] | null>;
   image_count: number;
   primary_image_url: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ProductDictionary = {
+  id: string;
+  kind: "category" | "brand";
+  name: string;
+  status: "active" | "archived";
   created_at: string;
   updated_at: string;
 };
@@ -64,5 +79,9 @@ export type ProductImage = {
   match_confidence: number;
   match_source: string;
   content_url: string;
+  processed_content_url: string | null;
+  processed_sha256: string | null;
+  processed_mime_type: string | null;
+  background_removed: boolean;
   created_at: string;
 };

@@ -1,7 +1,7 @@
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, Response, status
 from fastapi.responses import FileResponse
 
 from app.api.dependencies import AuthContext, get_auth_context
@@ -9,14 +9,20 @@ from app.schemas.generation import (
     GenerationTaskCreateRequest,
     GenerationTaskDetailResponse,
     GenerationTaskListResponse,
+    HtmlQuoteCreateRequest,
 )
 from app.services.generation import GenerationService
+from app.services.html_quotes import HtmlQuoteService
 
 router = APIRouter(prefix="/generation-tasks", tags=["generation"])
 
 
 def get_service() -> GenerationService:
     return GenerationService()
+
+
+def get_html_quote_service() -> HtmlQuoteService:
+    return HtmlQuoteService()
 
 
 @router.get("", response_model=GenerationTaskListResponse)
@@ -43,6 +49,27 @@ async def create_generation_task(
         tenant_id=context.tenant.id,
         user_id=context.user.id,
         payload=payload,
+    )
+
+
+@router.post("/html-quote", response_class=Response)
+async def create_html_quote(
+    payload: HtmlQuoteCreateRequest,
+    context: Annotated[AuthContext, Depends(get_auth_context, scope="function")],
+    service: Annotated[HtmlQuoteService, Depends(get_html_quote_service)],
+) -> Response:
+    document = await service.create_document(
+        context.session,
+        tenant_id=context.tenant.id,
+        payload=payload,
+    )
+    return Response(
+        content=document.content,
+        media_type="text/html; charset=utf-8",
+        headers={
+            "Content-Disposition": f'attachment; filename="{document.filename}"',
+            "X-ProductFlow-Snapshot": "standalone-html",
+        },
     )
 
 

@@ -3,14 +3,16 @@ import {
   Database,
   FileArchive,
   FileSpreadsheet,
+  KeyRound,
   Loader2,
   PackageSearch,
   RefreshCw,
   ShieldCheck,
   Users,
 } from "lucide-react";
-import { type ReactNode, useCallback, useEffect, useState } from "react";
+import { type FormEvent, type ReactNode, useCallback, useEffect, useState } from "react";
 
+import { Modal } from "../components/ui/Modal";
 import { Button } from "../components/ui/button";
 import { Badge, Card, EmptyState, PageHeader } from "../components/ui/primitives";
 import { apiRequest, ApiError } from "../lib/api";
@@ -56,6 +58,7 @@ const countLabels: Record<string, string> = {
   product_field_values: "字段值",
   stored_files: "文件",
   product_images: "产品图片",
+  product_dictionary_entries: "分类 / 品牌字典",
   import_templates: "导入模板",
   import_jobs: "导入任务",
   import_rows: "导入数据行",
@@ -73,6 +76,7 @@ const rawEntities = [
   ["field_definitions", "字段定义"],
   ["product_field_values", "产品字段值"],
   ["product_images", "产品图片"],
+  ["product_dictionary_entries", "分类 / 品牌字典"],
   ["product_sets", "产品组合"],
   ["product_set_items", "组合产品"],
   ["import_templates", "导入模板"],
@@ -107,7 +111,7 @@ function TableShell({ children }: { children: ReactNode }) {
   return <div className="overflow-x-auto">{children}</div>;
 }
 
-function DataTable({ section, data }: { section: Section; data: AdminData[Section] }) {
+function DataTable({ section, data, onResetUser }: { section: Section; data: AdminData[Section]; onResetUser: (user: AdminUser) => void }) {
   if (data.items.length === 0) {
     return <EmptyState icon={<Database className="size-5" />} title="暂无数据" description="该数据表目前没有记录。" />;
   }
@@ -121,7 +125,7 @@ function DataTable({ section, data }: { section: Section; data: AdminData[Sectio
   if (section === "users") {
     const items = data.items as AdminUser[];
     return (
-      <TableShell><table className="w-full min-w-[940px] text-left"><thead className="bg-slate-50 text-[11px] uppercase tracking-wide text-slate-500"><tr><th className="px-5 py-3">账号</th><th className="px-4 py-3">所属租户</th><th className="px-4 py-3">角色</th><th className="px-4 py-3">状态</th><th className="px-4 py-3">最近登录</th><th className="px-5 py-3">创建时间</th></tr></thead><tbody className="divide-y divide-slate-100">{items.map((item) => <tr key={item.id}><td className="px-5 py-3"><p className="font-semibold text-slate-900">{item.username}</p><p className="text-xs text-slate-500">{item.email}</p></td><td className="px-4 py-3"><TenantCell name={item.tenant_name} slug={item.tenant_slug} /></td><td className="px-4 py-3"><Badge tone={item.is_platform_admin ? "purple" : "blue"}>{item.is_platform_admin ? "平台管理员" : item.role}</Badge></td><td className="px-4 py-3"><Badge tone={item.status === "active" ? "green" : "red"}>{item.status}</Badge></td><td className="px-4 py-3 text-xs text-slate-500">{dateTime(item.last_login_at)}</td><td className="px-5 py-3 text-xs text-slate-500">{dateTime(item.created_at)}</td></tr>)}</tbody></table></TableShell>
+      <TableShell><table className="w-full min-w-[1040px] text-left"><thead className="bg-slate-50 text-[11px] uppercase tracking-wide text-slate-500"><tr><th className="px-5 py-3">账号</th><th className="px-4 py-3">所属租户</th><th className="px-4 py-3">角色</th><th className="px-4 py-3">状态</th><th className="px-4 py-3">最近登录</th><th className="px-4 py-3">创建时间</th><th className="px-5 py-3 text-right">操作</th></tr></thead><tbody className="divide-y divide-slate-100">{items.map((item) => <tr key={item.id}><td className="px-5 py-3"><p className="font-semibold text-slate-900">{item.username}</p><p className="text-xs text-slate-500">{item.email}</p></td><td className="px-4 py-3"><TenantCell name={item.tenant_name} slug={item.tenant_slug} /></td><td className="px-4 py-3"><Badge tone={item.is_platform_admin ? "purple" : "blue"}>{item.is_platform_admin ? "平台管理员" : item.role}</Badge></td><td className="px-4 py-3"><Badge tone={item.status === "active" ? "green" : "red"}>{item.status}</Badge></td><td className="px-4 py-3 text-xs text-slate-500">{dateTime(item.last_login_at)}</td><td className="px-4 py-3 text-xs text-slate-500">{dateTime(item.created_at)}</td><td className="px-5 py-3 text-right"><Button variant="secondary" className="h-8 px-3 text-xs" onClick={() => onResetUser(item)}><KeyRound className="size-3.5" />重置密码</Button></td></tr>)}</tbody></table></TableShell>
     );
   }
   if (section === "products") {
@@ -139,6 +143,47 @@ function DataTable({ section, data }: { section: Section; data: AdminData[Sectio
   const items = data.items as AdminFile[];
   return (
     <TableShell><table className="w-full min-w-[980px] text-left"><thead className="bg-slate-50 text-[11px] uppercase tracking-wide text-slate-500"><tr><th className="px-5 py-3">文件</th><th className="px-4 py-3">所属租户</th><th className="px-4 py-3">类型</th><th className="px-4 py-3">大小</th><th className="px-4 py-3">尺寸</th><th className="px-4 py-3">SHA256</th><th className="px-5 py-3">创建时间</th></tr></thead><tbody className="divide-y divide-slate-100">{items.map((item) => <tr key={item.id}><td className="px-5 py-3"><p className="max-w-64 truncate font-semibold text-slate-900" title={item.original_filename}>{item.original_filename}</p><p className="max-w-64 truncate text-[11px] text-slate-400">{item.safe_filename}</p></td><td className="px-4 py-3"><TenantCell name={item.tenant_name} slug={item.tenant_slug} /></td><td className="px-4 py-3 text-xs text-slate-500">{item.mime_type}</td><td className="px-4 py-3 text-xs">{fileSize(item.size_bytes)}</td><td className="px-4 py-3 text-xs">{item.width && item.height ? `${item.width} × ${item.height}` : "—"}</td><td className="px-4 py-3 font-mono text-[11px] text-slate-400">{item.sha256.slice(0, 12)}…</td><td className="px-5 py-3 text-xs text-slate-500">{dateTime(item.created_at)}</td></tr>)}</tbody></table></TableShell>
+  );
+}
+
+function ResetPasswordModal({ user, onClose, onReset }: { user: AdminUser; onClose: () => void; onReset: (message: string) => void }) {
+  const [password, setPassword] = useState("");
+  const [confirmation, setConfirmation] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    setError(null);
+    if (password !== confirmation) {
+      setError("两次输入的密码不一致。");
+      return;
+    }
+    setSubmitting(true);
+    try {
+      await apiRequest(`/admin/users/${user.id}/reset-password`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ new_password: password }),
+      });
+      onReset(`${user.username} 的密码已重置，原有登录会话已失效。`);
+    } catch (caught) {
+      setError(caught instanceof ApiError ? caught.message : "账号密码重置失败。");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <Modal title={`重置账号 ${user.username}`} description={`${user.tenant_name} · ${user.email}`} onClose={onClose}>
+      <form className="space-y-4 p-5" onSubmit={submit}>
+        <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs leading-5 text-amber-800">重置后旧密码立即失效，该账号现有登录会话也会被撤销；产品、客户和历史业务数据不会受到影响。</div>
+        <label><span className="label">新密码 *</span><input className="input" type="password" autoComplete="new-password" minLength={12} maxLength={128} required value={password} onChange={(event) => setPassword(event.target.value)} placeholder="至少 12 个字符" /></label>
+        <label><span className="label">确认新密码 *</span><input className="input" type="password" autoComplete="new-password" minLength={12} maxLength={128} required value={confirmation} onChange={(event) => setConfirmation(event.target.value)} /></label>
+        {error ? <p role="alert" className="rounded-lg bg-red-50 px-3 py-2 text-xs text-red-700">{error}</p> : null}
+        <div className="flex justify-end gap-2 border-t border-slate-100 pt-4"><Button variant="secondary" onClick={onClose}>取消</Button><Button type="submit" disabled={submitting}>{submitting ? <><Loader2 className="size-4 animate-spin" />正在重置…</> : <><KeyRound className="size-4" />确认重置</>}</Button></div>
+      </form>
+    </Modal>
   );
 }
 
@@ -193,6 +238,8 @@ export function AdminPage() {
   const [data, setData] = useState<AdminData[Section] | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [resetTarget, setResetTarget] = useState<AdminUser | null>(null);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -215,11 +262,13 @@ export function AdminPage() {
 
   return (
     <div className="space-y-6">
-      <PageHeader eyebrow="Platform Administration" title="系统后台" description="跨租户查看平台数据。该入口为只读视图，所有业务写入仍受租户 RLS 隔离。" actions={<Button variant="secondary" onClick={() => void load()} disabled={loading}><RefreshCw className={cn("size-4", loading && "animate-spin")} />刷新</Button>} />
+      <PageHeader eyebrow="Platform Administration" title="系统后台" description="跨租户查看平台数据，并由平台管理员安全重置账号密码。其他业务数据仍为只读。" actions={<Button variant="secondary" onClick={() => void load()} disabled={loading}><RefreshCw className={cn("size-4", loading && "animate-spin")} />刷新</Button>} />
 
       <div className="rounded-xl border border-violet-200 bg-violet-50/80 px-4 py-3 text-sm text-violet-800">
-        <div className="flex items-center gap-2 font-semibold"><ShieldCheck className="size-4" />平台管理员只读模式</div>
+        <div className="flex items-center gap-2 font-semibold"><ShieldCheck className="size-4" />业务数据只读 · 账号密码可安全重置</div>
       </div>
+
+      {successMessage ? <div role="status" className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-700">{successMessage}</div> : null}
 
       {overview ? (
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-6">
@@ -237,11 +286,12 @@ export function AdminPage() {
         </div>
         {loading ? <div className="grid min-h-56 place-items-center text-sm text-slate-500"><span className="flex items-center gap-2"><Loader2 className="size-4 animate-spin" />正在读取跨租户数据…</span></div> : null}
         {!loading && error ? <div role="alert" className="m-5 rounded-xl bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div> : null}
-        {!loading && !error && data ? <DataTable section={section} data={data} /> : null}
+        {!loading && !error && data ? <DataTable section={section} data={data} onResetUser={setResetTarget} /> : null}
         {!loading && data ? <div className="border-t border-slate-100 px-5 py-3 text-xs text-slate-500">共 {data.total} 条；当前显示前 {data.page_size} 条。</div> : null}
       </Card>
 
       <AllDataBrowser />
+      {resetTarget ? <ResetPasswordModal user={resetTarget} onClose={() => setResetTarget(null)} onReset={(message) => { setResetTarget(null); setSuccessMessage(message); }} /> : null}
     </div>
   );
 }

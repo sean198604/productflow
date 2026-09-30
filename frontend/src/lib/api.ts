@@ -34,7 +34,8 @@ export async function apiRequest<T>(
     const accessToken = getAccessToken();
     if (accessToken) headers.set("Authorization", `Bearer ${accessToken}`);
 
-    const response = await fetch(`${API_BASE_URL}${path}`, {
+    const requestUrl = path.startsWith("/api/v1/") ? path : `${API_BASE_URL}${path}`;
+    const response = await fetch(requestUrl, {
       ...options,
       signal: controller.signal,
       headers,
@@ -77,6 +78,49 @@ export async function apiBlob(path: string, timeoutMs = DEFAULT_TIMEOUT_MS): Pro
     const response = await fetch(`${path}`, { headers, signal: controller.signal });
     if (!response.ok) throw new ApiError("图片加载失败。", response.status);
     return await response.blob();
+  } finally {
+    window.clearTimeout(timeoutId);
+  }
+}
+
+export async function apiDownload(
+  path: string,
+  options: ApiRequestOptions = {},
+): Promise<{ blob: Blob; filename: string | null }> {
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(
+    () => controller.abort(),
+    options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+  );
+  try {
+    const headers = new Headers(options.headers);
+    headers.set("Accept", "text/html,application/octet-stream");
+    const accessToken = getAccessToken();
+    if (accessToken) headers.set("Authorization", `Bearer ${accessToken}`);
+    const requestUrl = path.startsWith("/api/v1/") ? path : `${API_BASE_URL}${path}`;
+    const response = await fetch(requestUrl, {
+      ...options,
+      headers,
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      const payload = (await response.json().catch(() => null)) as
+        | { message?: string; request_id?: string }
+        | null;
+      throw new ApiError(
+        payload?.message ?? `Request failed with status ${response.status}`,
+        response.status,
+        payload?.request_id ?? response.headers.get("X-Request-ID") ?? undefined,
+      );
+    }
+    const disposition = response.headers.get("Content-Disposition");
+    const filename = disposition?.match(/filename="?([^";]+)"?/i)?.[1] ?? null;
+    return { blob: await response.blob(), filename };
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") {
+      throw new ApiError("生成超时，请减少产品数量后重试。", 408);
+    }
+    throw error;
   } finally {
     window.clearTimeout(timeoutId);
   }

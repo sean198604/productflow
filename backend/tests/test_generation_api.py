@@ -99,7 +99,8 @@ def test_customer_product_set_and_xlsx_generation_snapshot(
             "product_name": "=FORMULA-MUST-STAY-TEXT",
             "status": "active",
             "custom_fields": {
-                "selling_price": "12.5",
+                "price": "1980",
+                "price_usd": "12.5",
                 "supplier_cost": "8.25",
             },
         },
@@ -191,6 +192,8 @@ def test_customer_product_set_and_xlsx_generation_snapshot(
     task = generation_response.json()
     assert task["status"] == "completed", task
     assert task["download_url"]
+    assert task["quote_currency"] == "USD"
+    assert task["quote_currencies"] == ["USD"]
     snapshot_fields = task["product_snapshot"][0]["fields"]
     assert snapshot_fields["product_name"] == "=FORMULA-MUST-STAY-TEXT"
     assert snapshot_fields["selling_price"] == "12.5"
@@ -207,6 +210,45 @@ def test_customer_product_set_and_xlsx_generation_snapshot(
     assert sheet["A2"].number_format == '"$"#,##0.00'
     assert sheet["A3"].value == "Generation Customer"
     generated.close()
+
+    multi_currency_response = client.post(
+        "/api/v1/generation-tasks",
+        headers=headers,
+        json={
+            "name": "Dual-currency generated quote",
+            "customer_id": customer["id"],
+            "product_set_id": product_set["id"],
+            "output_template_version_id": version["id"],
+            "output_parameters": {"currencies": ["USD", "JPY"]},
+        },
+    )
+    assert multi_currency_response.status_code == 201, multi_currency_response.text
+    multi_task = multi_currency_response.json()
+    assert multi_task["quote_currency"] == "USD"
+    assert multi_task["quote_currencies"] == ["USD", "JPY"]
+    assert multi_task["output_parameters"]["currencies"] == ["USD", "JPY"]
+    assert multi_task["product_snapshot"][0]["pricing"] == {
+        "currency": "USD",
+        "amount": "12.5",
+        "source_field": "price_usd",
+        "selected_currencies": ["USD", "JPY"],
+        "currencies": [
+            {"currency": "USD", "amount": "12.5", "source_field": "price_usd"},
+            {"currency": "JPY", "amount": "1980", "source_field": "price"},
+        ],
+    }
+    assert (
+        multi_task["product_snapshot"][0]["fields"]["selling_price"]
+        == "USD $12.50\nJPY ¥1,980"
+    )
+    multi_download = client.get(multi_task["download_url"], headers=headers)
+    assert multi_download.status_code == 200, multi_download.text
+    multi_workbook = load_workbook(BytesIO(multi_download.content), data_only=False)
+    assert (
+        multi_workbook["Quotation"]["A2"].value
+        == "USD $12.50\nJPY ¥1,980"
+    )
+    multi_workbook.close()
 
     protected_product = client.delete(
         f"/api/v1/products/{product_id}", headers=headers

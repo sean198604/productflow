@@ -201,6 +201,7 @@ def test_excel_import_analyze_preview_confirm_and_duplicate_policy(
     products = client.get("/api/v1/products?search=IMP-", headers=headers)
     assert products.status_code == 200
     assert products.json()["total"] == 2
+    assert [item["sku"] for item in products.json()["items"]] == ["IMP-002", "IMP-001"]
     first = next(item for item in products.json()["items"] if item["sku"] == "IMP-001")
     assert first["custom_fields"]["supplier_cost"] == "4.25"
     assert first["image_count"] == 1

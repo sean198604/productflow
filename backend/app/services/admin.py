@@ -1,6 +1,10 @@
+from uuid import UUID
+
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.errors import NotFoundError
+from app.core.security import hash_password
 from app.models import (
     Customer,
     CustomerSetting,
@@ -15,6 +19,7 @@ from app.models import (
     OutputTemplate,
     OutputTemplateVersion,
     Product,
+    ProductDictionaryEntry,
     ProductFieldValue,
     ProductImage,
     ProductSet,
@@ -30,6 +35,7 @@ from app.schemas.admin import (
     AdminImportJobItem,
     AdminImportJobListResponse,
     AdminOverviewResponse,
+    AdminPasswordResetResponse,
     AdminProductItem,
     AdminProductListResponse,
     AdminTenantItem,
@@ -46,6 +52,7 @@ ADMIN_DATA_MODELS = {
     "product_sets": ProductSet,
     "product_set_items": ProductSetItem,
     "product_field_values": ProductFieldValue,
+    "product_dictionary_entries": ProductDictionaryEntry,
     "product_images": ProductImage,
     "import_templates": ImportTemplate,
     "import_rows": ImportRow,
@@ -62,6 +69,17 @@ async def _total(session: AsyncSession, model) -> int:
 
 
 class AdminService:
+    async def reset_user_password(
+        self, session: AsyncSession, *, user_id: UUID, new_password: str
+    ) -> AdminPasswordResetResponse:
+        user = await session.get(User, user_id)
+        if user is None:
+            raise NotFoundError("账号不存在。")
+        user.password_hash = hash_password(new_password)
+        user.token_version += 1
+        await session.flush()
+        return AdminPasswordResetResponse(user_id=user.id, username=user.username)
+
     async def overview(self, session: AsyncSession) -> AdminOverviewResponse:
         models = {
             "tenants": Tenant,
@@ -74,6 +92,7 @@ class AdminService:
             "product_sets": ProductSet,
             "product_set_items": ProductSetItem,
             "product_field_values": ProductFieldValue,
+            "product_dictionary_entries": ProductDictionaryEntry,
             "stored_files": StoredFile,
             "product_images": ProductImage,
             "import_templates": ImportTemplate,

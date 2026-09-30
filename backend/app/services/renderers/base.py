@@ -118,7 +118,7 @@ def format_text(
             currency = (
                 parameters.get("currency_symbol")
                 or customer.get("settings", {}).get("currency_symbol")
-                or {"USD": "$", "EUR": "€", "GBP": "£", "CNY": "¥"}.get(
+                or {"JPY": "¥", "USD": "$", "EUR": "€", "GBP": "£", "CNY": "¥"}.get(
                     customer.get("currency", "USD"), customer.get("currency", "USD") + " "
                 )
             )

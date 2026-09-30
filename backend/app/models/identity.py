@@ -74,6 +74,7 @@ class User(Base):
     username: Mapped[str] = mapped_column(String(80), nullable=False)
     email: Mapped[str] = mapped_column(String(320), nullable=False)
     password_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    token_version: Mapped[int] = mapped_column(nullable=False, default=0, server_default="0")
     role: Mapped[str] = mapped_column(String(20), nullable=False, default="member")
     is_platform_admin: Mapped[bool] = mapped_column(
         Boolean,

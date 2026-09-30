@@ -33,6 +33,7 @@ def test_access_token_contains_tenant_and_user_identity() -> None:
     assert claims.user_id == user_id
     assert claims.tenant_id == tenant_id
     assert claims.role == "owner"
+    assert claims.token_version == 0
 
 
 def test_invalid_access_token_is_rejected() -> None:

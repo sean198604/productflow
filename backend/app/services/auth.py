@@ -69,6 +69,7 @@ class AuthService:
             user_id=user.id,
             tenant_id=user.tenant_id,
             role=user.role,
+            token_version=user.token_version,
         )
         return AuthenticatedSession(
             access_token=access_token,
@@ -121,6 +122,7 @@ class AuthService:
             user_id=user.id,
             tenant_id=user.tenant_id,
             role=user.role,
+            token_version=user.token_version,
         )
         return AuthenticatedSession(
             access_token=access_token,

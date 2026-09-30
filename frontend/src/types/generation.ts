@@ -60,6 +60,8 @@ export type GenerationTask = {
   template_name: string;
   template_version_number: number;
   product_count: number;
+  quote_currency: string;
+  quote_currencies: string[];
   output_filename: string | null;
   download_url: string | null;
   error_message: string | null;

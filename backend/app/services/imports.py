@@ -704,6 +704,18 @@ class ImportJobService:
             if duplicate is not None:
                 candidate.status = "skipped"
                 continue
+            original_file = await session.get(StoredFile, candidate.stored_file_id)
+            if original_file is None:
+                candidate.status = "unmatched"
+                candidate.matched_product_id = None
+                continue
+            processed_file, background_removed = (
+                await self.products.image_processor.ensure_transparent_variant(
+                    session,
+                    tenant_id=job.tenant_id,
+                    original=original_file,
+                )
+            )
             image_count = int(
                 await session.scalar(
                     select(func.count())
@@ -724,6 +736,8 @@ class ImportJobService:
                     tenant_id=job.tenant_id,
                     product_id=product.id,
                     stored_file_id=candidate.stored_file_id,
+                    processed_file_id=processed_file.id,
+                    background_removed=background_removed,
                     image_type=candidate.image_type,
                     sort_order=image_count,
                     is_primary=make_primary,

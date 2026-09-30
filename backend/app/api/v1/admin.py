@@ -1,4 +1,5 @@
 from typing import Annotated
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
@@ -8,6 +9,8 @@ from app.schemas.admin import (
     AdminFileListResponse,
     AdminImportJobListResponse,
     AdminOverviewResponse,
+    AdminPasswordResetRequest,
+    AdminPasswordResetResponse,
     AdminProductListResponse,
     AdminTenantListResponse,
     AdminUserListResponse,
@@ -47,6 +50,20 @@ async def users(
     page_size: Annotated[int, Query(ge=1, le=100)] = 50,
 ) -> AdminUserListResponse:
     return await service.users(context.session, page=page, page_size=page_size)
+
+
+@router.post("/users/{user_id}/reset-password", response_model=AdminPasswordResetResponse)
+async def reset_user_password(
+    user_id: UUID,
+    payload: AdminPasswordResetRequest,
+    context: Annotated[AuthContext, Depends(get_platform_admin_context)],
+    service: Annotated[AdminService, Depends(get_admin_service)],
+) -> AdminPasswordResetResponse:
+    return await service.reset_user_password(
+        context.session,
+        user_id=user_id,
+        new_password=payload.new_password,
+    )
 
 
 @router.get("/products", response_model=AdminProductListResponse)
